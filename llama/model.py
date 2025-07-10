@@ -111,13 +111,15 @@ class Attention(nn.Module):
 
         self.cache_k = torch.zeros(
             (args.max_batch_size, args.max_seq_len, self.n_local_heads, self.head_dim)
-        ).cuda()
+        )
         self.cache_v = torch.zeros(
             (args.max_batch_size, args.max_seq_len, self.n_local_heads, self.head_dim)
-        ).cuda()
+        )
 
     def forward(self, x: torch.Tensor, start_pos: int, freqs_cis: torch.Tensor, mask: Optional[torch.Tensor]):
         bsz, seqlen, _ = x.shape
+
+        # Compute Q, K, and V, but only for the *newly provided* tokens.
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
 
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
@@ -129,6 +131,7 @@ class Attention(nn.Module):
         self.cache_k = self.cache_k.to(xq)
         self.cache_v = self.cache_v.to(xq)
 
+        # Fill in the new K/V to the cache.
         self.cache_k[:bsz, start_pos : start_pos + seqlen] = xk
         self.cache_v[:bsz, start_pos : start_pos + seqlen] = xv
 

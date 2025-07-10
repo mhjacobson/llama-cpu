@@ -32,7 +32,7 @@ class LLaMA:
 
         total_len = min(params.max_seq_len, max_gen_len + max_prompt_size)
 
-        tokens = torch.full((bsz, total_len), self.tokenizer.pad_id).cuda().long()
+        tokens = torch.full((bsz, total_len), self.tokenizer.pad_id).long()
         for k, t in enumerate(prompt_tokens):
             tokens[k, : len(t)] = torch.tensor(t).long()
         input_text_mask = tokens != self.tokenizer.pad_id
@@ -64,6 +64,43 @@ class LLaMA:
                 pass
             decoded.append(self.tokenizer.decode(t))
         return decoded
+
+    def stream_generate(self, prompt: str, max_gen_len: int, temperature: float = 0.8, top_p: float = 0.95):
+        """Generate text yielding one token at a time."""
+        prompt_tokens = self.tokenizer.encode(prompt, bos=True, eos=False)
+        total_len = min(self.model.params.max_seq_len, max_gen_len + len(prompt))
+        tokens = torch.full((1, total_len), self.tokenizer.pad_id).long()
+        tokens[0, :len(prompt_tokens)] = torch.tensor(prompt_tokens).long()
+
+        start_pos = len(prompt_tokens)
+        prev_pos = 0
+        for cur_pos in range(start_pos, total_len):
+            logits = self.model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
+            if temperature > 0:
+                probs = torch.softmax(logits / temperature, dim=-1)
+                next_token = sample_top_p(probs, top_p)
+            else:
+                next_token = torch.argmax(logits, dim=-1)
+            next_token = next_token.reshape(-1)
+            tokens[:, cur_pos] = next_token
+
+            # Decode the full sequence and yield only the new part
+            full_text = self.tokenizer.decode(tokens[0, :cur_pos+1].tolist())
+            if cur_pos == start_pos:
+                # First generated token - yield everything after the prompt
+                prompt_text = self.tokenizer.decode(tokens[0, :start_pos].tolist())
+                new_text = full_text[len(prompt_text):]
+            else:
+                # Subsequent tokens - yield only the new part
+                prev_text = self.tokenizer.decode(tokens[0, :cur_pos].tolist())
+                new_text = full_text[len(prev_text):]
+            yield new_text
+
+            # Stop if we hit EOS
+            if next_token.item() == self.tokenizer.eos_id:
+                break
+
+            prev_pos = cur_pos
 
 
 def sample_top_p(probs, p):
